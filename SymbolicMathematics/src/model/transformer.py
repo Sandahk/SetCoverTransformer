@@ -225,6 +225,7 @@ class TransformerModel(nn.Module):
         elif mode == 'predict':
             return self.predict(**kwargs)
         else:
+
             raise Exception("Unknown mode: %s" % mode)
 
     def fwd(self, x, lengths, causal, src_enc=None, src_len=None, positions=None, cache=None, previous_state=None):
