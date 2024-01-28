@@ -150,6 +150,10 @@ tar -xvf prim_fwd.tar.gz
 
 Once you have a training / validation / test set, you can train using the following command:
 
+```
+python main.py --cpu True --exp_name first_train --fp16 false --amp 2 --tasks "prim_fwd" --reload_data "prim_fwd,prim_fwd.train,prim_fwd.valid,prim_fwd.test" --reload_size 40000000 --emb_dim 1024 --n_enc_layers 6 --n_dec_layers 6  --n_heads 8 --optimizer "adam,lr=0.0001" --batch_size 32 --epoch_size 300000 --validation_metrics valid_prim_fwd_acc --amp=-1
+```
+
 ```bash
 python main.py
 
