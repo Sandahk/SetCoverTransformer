@@ -30,11 +30,13 @@ from .sympy_utils import remove_root_constant_terms, reduce_coefficients, reinde
 from .sympy_utils import extract_non_constant_subtree, simplify_const_with_coeff, simplify_equa_diff, clean_degree2_solution
 from .sympy_utils import remove_mul_const, has_inf_nan, has_I, simplify
 
+#Sanda:
+from itertools import combinations
 
 CLEAR_SYMPY_CACHE_FREQ = 10000
 
 
-SPECIAL_WORDS = ['<s>', '</s>', '<pad>', '(', ')']
+SPECIAL_WORDS = ['<s>', '</s>', '<pad>', '(', ')', '[', ']', ',']
 SPECIAL_WORDS = SPECIAL_WORDS + [f'<SPECIAL_{i}>' for i in range(len(SPECIAL_WORDS), 10)]
 
 
@@ -134,7 +136,7 @@ def eval_test_zero(eq):
 
 class CharSPEnvironment(object):
 
-    TRAINING_TASKS = {'prim_fwd', 'prim_bwd', 'prim_ibp', 'ode1', 'ode2'}
+    TRAINING_TASKS = {'prim_fwd', 'prim_bwd', 'prim_ibp', 'ode1', 'ode2', 'set_cover'}
 
     # https://docs.sympy.org/latest/modules/functions/elementary.html#real-root
 
@@ -773,6 +775,51 @@ class CharSPEnvironment(object):
         expr = expr.split()
         return expr
 
+    def is_covering(self, matrix, selected_columns, rows):
+        covered = set()
+        for col in selected_columns:
+            covered.update(np.where(matrix[:, col])[0])
+        return len(covered) == rows
+
+    def set_cover_bruteforce(self, matrix):
+        rows, cols = matrix.shape
+        for num_columns in range(1, cols + 1):
+            for selected_columns in combinations(range(cols), num_columns):
+                if self.is_covering(matrix, selected_columns, rows):
+                    return selected_columns
+        return None
+
+    def list_to_tokens(self, lst):
+        return [str(c) for c in str(lst) if str(c) != ' ']
+
+    def gen_set_cover(self, rng, max_universe_size=6):
+        # num_matrices = 10
+        # max_universe_size = 6
+
+        # Generate a random binary matrix
+        num_rows = rng.randint(3, max_universe_size + 1)
+        num_cols = rng.randint(1, max_universe_size + 1)
+        binary_matrix = np.zeros((num_rows, num_cols), dtype=bool)
+        for i in range(num_rows):
+            binary_matrix[i, np.random.randint(0, num_cols)] = True
+        for j in range(num_cols):
+            binary_matrix[np.random.randint(0, num_rows), j] = True
+
+        # Find a set cover solution using brute force
+        solution_indices = self.set_cover_bruteforce(binary_matrix)
+        # Convert solution indices to the actual subsets
+        solution = [binary_matrix[:, idx] for idx in solution_indices]
+
+        # Convert binary matrix and solution to sequences
+        input_sequence = [list(np.where(column)[0]) for column in binary_matrix.T]
+        # Map the solution subsets to their corresponding indices in the input sequence
+        label_sequence = [subset for idx, subset in enumerate(input_sequence) if idx in solution_indices]
+
+        input_sequence = self.list_to_tokens(input_sequence)
+        label_sequence = self.list_to_tokens(label_sequence)
+
+        return input_sequence, label_sequence
+
     @timeout(3)
     def gen_prim_fwd(self, rng):
         """
@@ -1360,7 +1407,7 @@ class CharSPEnvironment(object):
             dataset,
             timeout=0,
             batch_size=params.batch_size,
-            num_workers=1,
+            num_workers=0,  # changed from 1 to 0!!
             shuffle=False,
             collate_fn=dataset.collate_fn
         )
@@ -1410,7 +1457,7 @@ class EnvDataset(Dataset):
         if self.train:
             self.size = 1 << 60
         else:
-            self.size = 5000 if path is None else len(self.data)
+            self.size = 100 if path is None else len(self.data)  # i changed from 5000 to 100
 
     def collate_fn(self, elements):
         """
@@ -1491,6 +1538,8 @@ class EnvDataset(Dataset):
                     xy = self.env.gen_prim_bwd(self.rng, predict_primitive=True)
                 elif self.task == 'prim_ibp':
                     xy = self.env.gen_prim_ibp(self.rng)
+                elif self.task == 'set_cover':
+                    xy = self.env.gen_set_cover(self.rng)
                 elif self.task == 'derivative':
                     xy = self.env.gen_prim_bwd(self.rng, predict_primitive=False)
                 elif self.task == 'ode1':

@@ -134,7 +134,7 @@ class Evaluator(object):
         decoder.eval()
         assert params.eval_verbose in [0, 1]
         assert params.eval_verbose_print is False or params.eval_verbose > 0
-        assert task in ['prim_fwd', 'prim_bwd', 'prim_ibp', 'ode1', 'ode2']
+        assert task in ['prim_fwd', 'prim_bwd', 'prim_ibp', 'ode1', 'ode2', 'set_cover']
 
         # stats
         xe_loss = 0

@@ -31,7 +31,7 @@ def generate_dataset(num_samples=1000, universe_size=6, max_subsets=5):
 
     return dataset
 
-# Building the dataset
+# Building the dataset and printing
 dataset = generate_dataset(num_samples=100)
 for example in dataset:
     print("Source Sequence (Subsets):", example['source_sequence'])
@@ -39,7 +39,6 @@ for example in dataset:
     print()
 
 import pickle
-
 def save_dataset(dataset, file_path):
     with open(file_path, 'wb') as f:
         pickle.dump(dataset, f)
