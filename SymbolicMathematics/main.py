@@ -181,11 +181,11 @@ def main(params):
     for _ in range(params.max_epoch):
 
         logger.info("============ Starting epoch %i ... ============" % trainer.epoch)
-
+        idx=0
         trainer.n_equations = 0
 
         while trainer.n_equations < trainer.epoch_size:
-
+            idx += 1
             # training steps
             for task_id in np.random.permutation(len(params.tasks)):
                 task = params.tasks[task_id]
@@ -210,7 +210,6 @@ def main(params):
         trainer.save_best_model(scores)
         trainer.save_periodic()
         trainer.end_epoch(scores)
-
 
 if __name__ == '__main__':
 

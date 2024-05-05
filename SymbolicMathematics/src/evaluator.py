@@ -12,13 +12,12 @@ import os
 import torch
 import sympy as sp
 
+from .envs import set_cover_utils
 from .utils import to_cuda, timeout, TimeoutError
 from .envs.char_sp import InvalidPrefixExpression, is_valid_expr
 from .envs.sympy_utils import simplify
 
-
 logger = getLogger()
-
 
 BUCKET_LENGTH_SIZE = 5
 
@@ -87,7 +86,6 @@ def check_hypothesis(eq):
 
 
 class Evaluator(object):
-
     ENV = None
 
     def __init__(self, trainer):
@@ -99,6 +97,18 @@ class Evaluator(object):
         self.params = trainer.params
         self.env = trainer.env
         Evaluator.ENV = trainer.env
+
+        # Sanda: Initializing for Error types in validation
+        self.error_counts = {
+            "Mismatched number of problem and solution sets": 0,
+            "Empty solution set": 0,
+            "Empty subset in solution set": 0,
+            "Subset not in problem set": 0,
+            "Solution not covering problem set": 0
+        }
+        self.valid_solution_count = 0
+        # Initialize epoch-wise counts
+        self.epoch_counts = []
 
     def run_all_evals(self):
         """
@@ -121,9 +131,54 @@ class Evaluator(object):
                     else:
                         self.enc_dec_step(data_type, task, scores)
 
+        #Sanda
+        # After all evaluations are done, update epoch counts and print summary table
+        #self.update_epoch_counts(self.trainer.epoch)
+        #self.print_summary_table()
+
         return scores
 
+    # Sanda
+    def update_epoch_counts(self, epoch):
+        """
+        Update epoch-wise counts.
+        """
+        self.epoch_counts.append({
+            'epoch': epoch,
+            'valid_solution_count': self.valid_solution_count,
+            'error_counts': self.error_counts.copy()  # Make a copy to avoid reference issues
+        })
+
+    #Sanda
+    def print_summary_table(self):
+        """
+        Print summary table of epoch-wise counts.
+        """
+        print("\nSummary Table:")
+        print("{:<10} {:<20} {:<20}".format('Epoch No.', 'Valid Solution Count', 'Error Counts'))
+        for epoch_data in self.epoch_counts:
+            epoch = epoch_data['epoch']
+            valid_count = epoch_data['valid_solution_count']
+            error_counts = epoch_data['error_counts']
+            error_counts_str = ', '.join([f"{key}: {value}" for key, value in error_counts.items()])
+            print("{:<10} {:<20} {:<20}".format(epoch, valid_count, error_counts_str))
+
     def enc_dec_step(self, data_type, task, scores):
+
+        #Sanda-Start:
+        idx = 0
+        pred_token_sequence = []
+        self.error_counts_validation = {
+            "Mismatched number of problem and solution sets": 0,
+            "Empty solution set": 0,
+            "Empty subset in solution set": 0,
+            "Subset not in problem set": 0,
+            "Solution not covering problem set": 0
+        }
+        self.valid_solution_count_validation = 0
+        valid_sequence_count_validation = 0
+        # Sanda-End
+
         """
         Encoding / decoding step.
         """
@@ -152,6 +207,7 @@ class Evaluator(object):
         eval_size = len(iterator.dataset)
 
         for (x1, len1), (x2, len2), nb_ops in iterator:
+            idx += 1
 
             # print status
             if n_total.sum().item() % 100 < params.batch_size:
@@ -166,6 +222,11 @@ class Evaluator(object):
             # cuda
             x1, len1, x2, len2, y = to_cuda(x1, len1, x2, len2, y)
 
+            #Sanda-Start:
+            input_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x1)
+            true_output_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x2)
+            #Sanda-End
+
             # forward / loss
             encoded = encoder('fwd', x=x1, lengths=len1, causal=False)
             decoded = decoder('fwd', x=x2, lengths=len2, causal=True, src_enc=encoded.transpose(0, 1), src_len=len1)
@@ -175,6 +236,39 @@ class Evaluator(object):
             t = torch.zeros_like(pred_mask, device=y.device)
             t[pred_mask] += word_scores.max(1)[1] == y
             valid = (t.sum(0) == len2 - 1).cpu().long()
+
+            #Sanda-Start:
+            with torch.no_grad():
+                _, _, beam = decoder.generate_beam(encoded.transpose(0, 1), len1, beam_size=1, length_penalty=1.0,
+                                                   early_stopping=1, max_len=200)
+
+                for b in range(len(beam)):
+                    best_hypothesis = beam[b].hyp[0][1]  # Best hypothesis in the beam
+                    ids = best_hypothesis[1:].tolist()  # Decoded token IDs
+                    tok = [self.env.id2word[wid] for wid in ids]  # Convert token IDs to tokens
+                    pred_token_sequence.extend(tok)  # Store the predicted sequence for this beam
+
+                input_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, input_token_sequence)
+                true_output_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, true_output_token_sequence)
+                pred_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, pred_token_sequence)
+
+
+                #print(f"Input Token Sequence(E) {idx}:", input_token_sequence)
+                #print(f"True Output Token Sequence(E) {idx}:", true_output_token_sequence)
+                #print(f"Prediction Token Sequence(E) {idx}:", pred_token_sequence)
+                print(f"Input list of lists(E) {idx}:", input_list_of_lists)
+                print(f"True output list of lists(E) {idx}:", true_output_list_of_lists)
+                print(f"Prediction list of lists(E) {idx}:", pred_list_of_lists)
+                self.number_of_sets_validation, self.valid_solution_count_validation, self.error_counts_validation, self.valid_sequence_bool_validation = set_cover_utils.validate_set_cover_solution_validation(self, input_list_of_lists, pred_list_of_lists)
+                if self.valid_sequence_bool_validation:
+                    valid_sequence_count_validation += 1
+
+                print(f"Number of correct answers in a sequence: {self.valid_solution_count_validation} / {self.number_of_sets_validation}")
+                print(f"error_counts: {self.error_counts_validation}")
+                print(f"Number of full correct sequence: {valid_sequence_count_validation} / {idx}")
+
+
+                #Sanda-End
 
             # export evaluation details
             if params.eval_verbose:
@@ -199,6 +293,7 @@ class Evaluator(object):
         # log
         _n_valid = n_valid.sum().item()
         _n_total = n_total.sum().item()
+        # check this!
         logger.info(f"{_n_valid}/{_n_total} ({100. * _n_valid / _n_total}%) equations were evaluated correctly.")
 
         # compute perplexity and prediction accuracy
@@ -214,6 +309,12 @@ class Evaluator(object):
             scores[f'{data_type}_{task}_acc_{i}'] = 100. * n_valid[i].item() / max(n_total[i].item(), 1)
 
     def enc_dec_step_beam(self, data_type, task, scores):
+
+        # Sanda-Start:
+        idx = 0
+        pred_token_sequence = []
+        # Sanda-End
+
         """
         Encoding / decoding step with beam generation and SymPy check.
         """
@@ -260,6 +361,19 @@ class Evaluator(object):
         iterator = env.create_test_iterator(data_type, task, params=params, data_path=self.trainer.data_path)
         eval_size = len(iterator.dataset)
 
+        # Sanda-Start:
+        self.error_counts = {
+            "Mismatched number of problem and solution sets": 0,
+            "Empty solution set": 0,
+            "Empty subset in solution set": 0,
+            "Subset not in problem set": 0,
+            "Solution not covering problem set": 0
+        }
+        self.valid_solution_count = 0
+        self.number_of_sets = 0
+        self.valid_sequence_bool = False
+        # Sanda-End
+
         for (x1, len1), (x2, len2), nb_ops in iterator:
 
             # target words to predict
@@ -271,6 +385,11 @@ class Evaluator(object):
             # cuda
             x1, len1, x2, len2, y = to_cuda(x1, len1, x2, len2, y)
             bs = len(len1)
+
+            # Sanda-Start:
+            input_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x1)
+            true_output_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x2)
+            # Sanda-End
 
             # forward
             encoded = encoder('fwd', x=x1, lengths=len1, causal=False)
@@ -303,7 +422,8 @@ class Evaluator(object):
 
             # invalid top-1 predictions - check if there is a solution in the beam
             invalid_idx = (1 - valid).nonzero().view(-1)
-            logger.info(f"({n_total.sum().item()}/{eval_size}) Found {bs - len(invalid_idx)}/{bs} valid top-1 predictions. Generating solutions ...")
+            logger.info(
+                f"({n_total.sum().item()}/{eval_size}) Found {bs - len(invalid_idx)}/{bs} valid top-1 predictions. Generating solutions ...")
 
             # generate
             _, _, generations = decoder.generate_beam(
@@ -369,6 +489,7 @@ class Evaluator(object):
             # valid solutions found with beam search
             logger.info(f"    Found {valid.sum().item()}/{bs} solutions in beam hypotheses.")
 
+
             # export evaluation details
             if params.eval_verbose:
                 assert len(beam_log) == bs
@@ -384,9 +505,9 @@ class Evaluator(object):
         _n_total = n_total.sum().item()
         logger.info(f"{_n_valid}/{_n_total} ({100. * _n_valid / _n_total}%) equations were evaluated correctly.")
         logger.info(n_valid[
-            :(n_valid.sum(1) > 0).nonzero().view(-1)[-1] + 1,
-            :(n_valid.sum(0) > 0).nonzero().view(-1)[-1] + 1
-        ])
+                    :(n_valid.sum(1) > 0).nonzero().view(-1)[-1] + 1,
+                    :(n_valid.sum(0) > 0).nonzero().view(-1)[-1] + 1
+                    ])
 
         # compute perplexity and prediction accuracy
         assert _n_total == eval_size or self.trainer.data_path
@@ -396,7 +517,8 @@ class Evaluator(object):
         for i in range(len(n_total)):
             if n_total[i].item() == 0:
                 continue
-            logger.info(f"{i}: {n_valid[i].sum().item()} / {n_total[i].item()} ({100. * n_valid[i].sum().item() / max(n_total[i].item(), 1)}%)")
+            logger.info(
+                f"{i}: {n_valid[i].sum().item()} / {n_total[i].item()} ({100. * n_valid[i].sum().item() / max(n_total[i].item(), 1)}%)")
             scores[f'{data_type}_{task}_beam_acc_{i}'] = 100. * n_valid[i].sum().item() / max(n_total[i].item(), 1)
 
 

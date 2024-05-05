@@ -817,6 +817,8 @@ class CharSPEnvironment(object):
 
         input_sequence = self.list_to_tokens(input_sequence)
         label_sequence = self.list_to_tokens(label_sequence)
+        #print('input_sequence in set-cover char_sp.py:', input_sequence)
+        #print('output_sequence in set-cover char_spy.py', label_sequence)
 
         return input_sequence, label_sequence
 
@@ -1565,3 +1567,4 @@ class EnvDataset(Dataset):
             clear_cache()
 
         return x, y
+

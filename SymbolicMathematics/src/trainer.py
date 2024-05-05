@@ -17,8 +17,10 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 
+from .envs import set_cover_utils
 from .optim import get_optimizer
 from .utils import to_cuda
+
 
 if torch.cuda.is_available():
     import apex
@@ -45,6 +47,19 @@ class Trainer(object):
         if self.epoch_size == -1:
             self.epoch_size = self.data
             assert self.epoch_size > 0
+
+        #Sanda-Start:
+        self.error_counts = {
+            "Mismatched number of problem and solution sets": 0,
+            "Empty solution set": 0,
+            "Empty subset in solution set": 0,
+            "Subset not in problem set": 0,
+            "Solution not covering problem set": 0
+        }
+        self.valid_solution_count = 0
+        self.number_of_sets=0
+        self.valid_sequence_bool= False
+        #Sanda-End
 
         # data iterators
         self.iterators = {}
@@ -265,6 +280,8 @@ class Trainer(object):
         # log speed + stats + learning rate
         logger.info(s_iter + s_speed + s_stat + s_lr)
 
+
+
     def save_checkpoint(self, name, include_optimizers=True):
         """
         Save the model / checkpoints.
@@ -447,6 +464,11 @@ class Trainer(object):
         encoder.train()
         decoder.train()
 
+        # Sanda-Start:
+        pred_token_sequence = []
+        valid_sequence_count = 0
+        # Sanda-End
+
         # batch
         (x1, len1), (x2, len2), _ = self.get_batch(task)
 
@@ -459,10 +481,58 @@ class Trainer(object):
         # cuda
         x1, len1, x2, len2, y = to_cuda(x1, len1, x2, len2, y)
 
+        # Sanda - Printing Input and Correct Output
+        input_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x1)
+        true_output_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x2)
+
+
         # forward / loss
         encoded = encoder('fwd', x=x1, lengths=len1, causal=False)
         decoded = decoder('fwd', x=x2, lengths=len2, causal=True, src_enc=encoded.transpose(0, 1), src_len=len1)
+
         _, loss = decoder('predict', tensor=decoded, pred_mask=pred_mask, y=y, get_scores=False)
+
+        #Sanda - Printing prediction
+        with torch.no_grad():
+            _, _, beam = decoder.generate_beam(encoded.transpose(0, 1), len1, beam_size=1, length_penalty=1.0, early_stopping=1, max_len=200)
+            # luca: extend to each beamhypothesis
+            #pred_output = beam[0].hyp[0][1] #best hypothesis
+            #ids = pred_output[1:].tolist()  # decoded token IDs
+            #tok = [self.env.id2word[wid] for wid in ids]  # convert to tokens
+            #pred_sequences.append(tok)  # Store the predicted sequence
+            #print('predicted sequence (standard)', tok)
+
+            for b in range(len(beam)):
+                best_hypothesis = beam[b].hyp[0][1]  # Best hypothesis in the beam
+                ids = best_hypothesis[1:].tolist()  # Decoded token IDs
+                tok = [self.env.id2word[wid] for wid in ids]  # Convert token IDs to tokens
+                pred_token_sequence.extend(tok)  # Store the predicted sequence for this beam
+
+
+            input_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, input_token_sequence)
+            true_output_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, true_output_token_sequence)
+            pred_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, pred_token_sequence)
+
+
+            print(f'epoch:{self.epoch}, Iteration No.{self.n_iter+1},:')
+            #print('Input Token Sequence:', input_token_sequence)
+            #print('True Output Token Sequence:', true_output_token_sequence)
+            #print('Prediction Token Sequence:', pred_token_sequence)
+            print('Input list of Lists :', input_list_of_lists)
+            print('True Output List of Lists', true_output_list_of_lists)
+            print('Prediction List of Lists:', pred_list_of_lists)
+            self.number_of_sets, self.valid_solution_count, self.error_counts, self.valid_sequence_bool = set_cover_utils.validate_set_cover_solution(self,
+                                                                                                       input_list_of_lists,
+                                                                                                       pred_list_of_lists)
+            if self.valid_sequence_bool:
+                valid_sequence_count += 1
+
+            print(f"Number of correct answers in a sequence: {self.valid_solution_count} / {self.number_of_sets}")
+            print(f"error_counts: {self.error_counts}")
+            print(f"Number of full correct sequence: {valid_sequence_count} / {self.n_iter+1}")
+
+#end of Sanda code
+
         self.stats[task].append(loss.item())
 
         # optimize
