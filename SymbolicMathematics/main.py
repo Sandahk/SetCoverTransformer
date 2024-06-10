@@ -195,10 +195,12 @@ def main(params):
                     trainer.enc_dec_step(task)
                 trainer.iter()
 
+        trainer.epoch_end_training() # Sanda
         logger.info("============ End of epoch %i ============" % trainer.epoch)
 
         # evaluate perplexity
         scores = evaluator.run_all_evals()
+        # todo: save scores to an external file with name 'epoch=[e].pkl' (I did this in trainer.py)
 
         # print / JSON log
         for k, v in scores.items():

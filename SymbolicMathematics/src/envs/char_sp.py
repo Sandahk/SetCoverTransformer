@@ -29,6 +29,7 @@ from ..utils import timeout, TimeoutError
 from .sympy_utils import remove_root_constant_terms, reduce_coefficients, reindex_coefficients
 from .sympy_utils import extract_non_constant_subtree, simplify_const_with_coeff, simplify_equa_diff, clean_degree2_solution
 from .sympy_utils import remove_mul_const, has_inf_nan, has_I, simplify
+from .set_cover_utils import list_to_tokens
 
 #Sanda:
 from itertools import combinations
@@ -36,7 +37,7 @@ from itertools import combinations
 CLEAR_SYMPY_CACHE_FREQ = 10000
 
 
-SPECIAL_WORDS = ['<s>', '</s>', '<pad>', '(', ')', '[', ']', ',']
+SPECIAL_WORDS = ['<s>', '</s>', '<pad>', '(', ')', '[', ']',',']
 SPECIAL_WORDS = SPECIAL_WORDS + [f'<SPECIAL_{i}>' for i in range(len(SPECIAL_WORDS), 10)]
 
 
@@ -310,6 +311,7 @@ class CharSPEnvironment(object):
 
         # vocabulary
         self.words = SPECIAL_WORDS + self.constants + list(self.variables.keys()) + list(self.coefficients.keys()) + self.operators + self.symbols + self.elements
+        #self.words = SPECIAL_WORDS
         self.id2word = {i: s for i, s in enumerate(self.words)}
         self.word2id = {s: i for i, s in self.id2word.items()}
         assert len(self.words) == len(set(self.words))
@@ -789,36 +791,69 @@ class CharSPEnvironment(object):
                     return selected_columns
         return None
 
-    def list_to_tokens(self, lst):
-        return [str(c) for c in str(lst) if str(c) != ' ']
 
     def gen_set_cover(self, rng, max_universe_size=6):
-        # num_matrices = 10
-        # max_universe_size = 6
-
         # Generate a random binary matrix
-        num_rows = rng.randint(3, max_universe_size + 1)
-        num_cols = rng.randint(1, max_universe_size + 1)
-        binary_matrix = np.zeros((num_rows, num_cols), dtype=bool)
+        num_rows = rng.randint(3, max_universe_size + 1) #elements
+        num_cols = rng.randint(2, 2*max_universe_size + 1) #subsets
+        binary_matrix = np.random.choice([False, True], size=(num_rows, num_cols))  # Randomly generate binary matrix
+
         for i in range(num_rows):
-            binary_matrix[i, np.random.randint(0, num_cols)] = True
+            if not binary_matrix[i].any():
+                binary_matrix[i, np.random.randint(0, num_cols)] = True
         for j in range(num_cols):
-            binary_matrix[np.random.randint(0, num_rows), j] = True
+            if not binary_matrix[:, j].any():
+                binary_matrix[np.random.randint(0, num_rows), j] = True
+
+        # Remove duplicate rows
+        binary_matrix = np.unique(binary_matrix, axis=1)
 
         # Find a set cover solution using brute force
         solution_indices = self.set_cover_bruteforce(binary_matrix)
-        # Convert solution indices to the actual subsets
-        solution = [binary_matrix[:, idx] for idx in solution_indices]
 
         # Convert binary matrix and solution to sequences
         input_sequence = [list(np.where(column)[0]) for column in binary_matrix.T]
         # Map the solution subsets to their corresponding indices in the input sequence
         label_sequence = [subset for idx, subset in enumerate(input_sequence) if idx in solution_indices]
 
-        input_sequence = self.list_to_tokens(input_sequence)
-        label_sequence = self.list_to_tokens(label_sequence)
-        #print('input_sequence in set-cover char_sp.py:', input_sequence)
-        #print('output_sequence in set-cover char_spy.py', label_sequence)
+        input_sequence = list_to_tokens(input_sequence)
+        label_sequence = list_to_tokens(label_sequence)
+
+        return input_sequence, label_sequence
+
+    def gen_set_cover2(self, rng, max_universe_size=6):
+        universe_list = list(range(10))  # Default universe list from 0 to 20
+        selected_elements = np.random.choice(universe_list, max_universe_size, replace=False)
+
+        # Generate a random binary matrix
+        num_rows = rng.randint(3, max_universe_size + 1) #elements
+        num_cols = rng.randint(2, 2*max_universe_size + 1) #subsets
+        binary_matrix = np.random.choice([False, True], size=(num_rows, num_cols))  # Randomly generate binary matrix
+
+
+        for i in range(num_rows):
+            if not binary_matrix[i].any():
+                binary_matrix[i, np.random.randint(0, num_cols)] = True
+        for j in range(num_cols):
+            if not binary_matrix[:, j].any():
+                binary_matrix[np.random.randint(0, num_rows), j] = True
+
+        # Remove duplicate rows
+        binary_matrix = np.unique(binary_matrix, axis=1)
+        # Find a set cover solution using brute force
+        solution_indices = self.set_cover_bruteforce(binary_matrix)
+
+        # Convert binary matrix columns to sequences of selected elements
+        input_sequence = []
+        for column in binary_matrix.T:
+            subset = [selected_elements[row] for row in np.where(column)[0]]
+            input_sequence.append(subset)
+
+        label_sequence = [subset for idx, subset in enumerate(input_sequence) if idx in solution_indices]
+
+        input_sequence = list_to_tokens(input_sequence)
+        label_sequence = list_to_tokens(label_sequence)
+
 
         return input_sequence, label_sequence
 

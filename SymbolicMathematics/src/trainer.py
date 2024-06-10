@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-
+import json
 import os
 import io
 import re
@@ -49,17 +49,46 @@ class Trainer(object):
             assert self.epoch_size > 0
 
         #Sanda-Start:
+        self.iteration_count = 0
+        self.coverage_percentage = 0
         self.error_counts = {
-            "Mismatched number of problem and solution sets": 0,
-            "Empty solution set": 0,
-            "Empty subset in solution set": 0,
+            "Wrong Format": 0,
             "Subset not in problem set": 0,
-            "Solution not covering problem set": 0
+            "Solution not covering problem set": 0,
+            "Solution is not optimal": 0
         }
         self.valid_solution_count = 0
-        self.number_of_sets=0
-        self.valid_sequence_bool= False
+        # total number of sets processed for training at each epoch
+        self.training_totalsets = 0
+        self.training_totalsets_epochs = []
+        # total number of valid answers for training at each epoch
+        self.training_valid_answers = 0
+        self.training_valid_answers_epochs = []
+        # total number of wrong-format answers for training at each epoch
+        self.training_error_wrong_format_count = 0
+        self.training_error_wrong_format_count_epochs = []
+        # total number of not existing-subset answers for training at each epoch
+        self.training_error_no_subset_count = 0
+        self.training_error_no_subset_count_epochs = []
+        # total number of not covering answers for training at each epoch
+        self.training_error_not_covering_count = 0
+        self.training_error_not_covering_count_epochs = []
+        #total number of not optimal answers for training at each epoch
+        self.training_error_not_optimal_count = 0
+        self.training_error_not_optimal_count_epochs = []
+        # coverage percentage calculations for not-covering
+        self.training_coverage_percentage_list_internal = []
+        self.training_coverage_average_percentage = 0
+        self.training_coverage_average_percentage_epochs = []
+
         #Sanda-End
+
+        self.error_counts_validation = {
+            "Wrong Format": 0,
+            "Subset not in problem set": 0,
+            "Solution not covering problem set": 0,
+            "Solution is not optimal": 0
+        }
 
         # data iterators
         self.iterators = {}
@@ -238,8 +267,9 @@ class Trainer(object):
 
     def iter(self):
         """
-        End of iteration.
+        End of iteration. (inside epoch)
         """
+
         self.n_iter += 1
         self.n_total_iter += 1
         self.print_stats()
@@ -459,15 +489,15 @@ class Trainer(object):
         """
         Encoding / decoding step.
         """
+
+        # Sanda:
+        pred_token_sequence = []
+        # Sanda-End
+
         params = self.params
         encoder, decoder = self.modules['encoder'], self.modules['decoder']
         encoder.train()
         decoder.train()
-
-        # Sanda-Start:
-        pred_token_sequence = []
-        valid_sequence_count = 0
-        # Sanda-End
 
         # batch
         (x1, len1), (x2, len2), _ = self.get_batch(task)
@@ -485,7 +515,6 @@ class Trainer(object):
         input_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x1)
         true_output_token_sequence = set_cover_utils.convert_tensor_to_token_sequence(self, x2)
 
-
         # forward / loss
         encoded = encoder('fwd', x=x1, lengths=len1, causal=False)
         decoded = decoder('fwd', x=x2, lengths=len2, causal=True, src_enc=encoded.transpose(0, 1), src_len=len1)
@@ -495,7 +524,7 @@ class Trainer(object):
         #Sanda - Printing prediction
         with torch.no_grad():
             _, _, beam = decoder.generate_beam(encoded.transpose(0, 1), len1, beam_size=1, length_penalty=1.0, early_stopping=1, max_len=200)
-            # luca: extend to each beamhypothesis
+            #JUST FIRST BEAM - NOT THE FULL SEQUENCE
             #pred_output = beam[0].hyp[0][1] #best hypothesis
             #ids = pred_output[1:].tolist()  # decoded token IDs
             #tok = [self.env.id2word[wid] for wid in ids]  # convert to tokens
@@ -506,30 +535,45 @@ class Trainer(object):
                 best_hypothesis = beam[b].hyp[0][1]  # Best hypothesis in the beam
                 ids = best_hypothesis[1:].tolist()  # Decoded token IDs
                 tok = [self.env.id2word[wid] for wid in ids]  # Convert token IDs to tokens
-                pred_token_sequence.extend(tok)  # Store the predicted sequence for this beam
+                pred_token_sequence.append(tok)  # Store the predicted sequence for this beam
+
+            its = input_token_sequence
+            tots = true_output_token_sequence
+            pts = pred_token_sequence
+
+            for input_token_sequence, true_output_token_sequence, pred_token_sequence in zip(its, tots, pts):
+                input_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, input_token_sequence)
+                true_output_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, true_output_token_sequence)
+                pred_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, pred_token_sequence)
 
 
-            input_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, input_token_sequence)
-            true_output_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, true_output_token_sequence)
-            pred_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, pred_token_sequence)
+                #print('Input Token Sequence:', input_token_sequence)
+                #print('True Output Token Sequence:', true_output_token_sequence)
+                #print('Prediction Token Sequence:', pred_token_sequence)
+                print("Training iteration:", self.iteration_count)
+                print('Input list of Lists :', input_list_of_lists)
+                print('True Output List of Lists:', true_output_list_of_lists)
+                print('Prediction List of Lists:', pred_list_of_lists)
+                self.valid_solution_count, self.error_counts, self.coverage_percentage = set_cover_utils.validate_set_cover_solution(self,
+                                                                                                           input_list_of_lists,
+                                                                                                           pred_list_of_lists, true_output_list_of_lists)
 
 
-            print(f'epoch:{self.epoch}, Iteration No.{self.n_iter+1},:')
-            #print('Input Token Sequence:', input_token_sequence)
-            #print('True Output Token Sequence:', true_output_token_sequence)
-            #print('Prediction Token Sequence:', pred_token_sequence)
-            print('Input list of Lists :', input_list_of_lists)
-            print('True Output List of Lists', true_output_list_of_lists)
-            print('Prediction List of Lists:', pred_list_of_lists)
-            self.number_of_sets, self.valid_solution_count, self.error_counts, self.valid_sequence_bool = set_cover_utils.validate_set_cover_solution(self,
-                                                                                                       input_list_of_lists,
-                                                                                                       pred_list_of_lists)
-            if self.valid_sequence_bool:
-                valid_sequence_count += 1
+                print(f"Number of correct answers in current sequence sequence:", self.valid_solution_count)
+                print(f"error_counts in a sequence: {self.error_counts}")
 
-            print(f"Number of correct answers in a sequence: {self.valid_solution_count} / {self.number_of_sets}")
-            print(f"error_counts: {self.error_counts}")
-            print(f"Number of full correct sequence: {valid_sequence_count} / {self.n_iter+1}")
+
+
+                self.training_totalsets += 1
+                self.training_valid_answers += self.valid_solution_count
+                self.training_error_wrong_format_count += self.error_counts["Wrong Format"]
+                self.training_error_no_subset_count += self.error_counts["Subset not in problem set"]
+                self.training_error_not_covering_count += self.error_counts["Solution not covering problem set"]
+                if self.error_counts["Solution not covering problem set"] == 1:
+                    self.training_coverage_percentage_list_internal.append(self.coverage_percentage)
+                self.training_error_not_optimal_count += self.error_counts["Solution is not optimal"]
+                self.iteration_count += 1
+
 
 #end of Sanda code
 
@@ -542,3 +586,67 @@ class Trainer(object):
         self.n_equations += params.batch_size
         self.stats['processed_e'] += len1.size(0)
         self.stats['processed_w'] += (len1 + len2 - 2).sum().item()
+
+        #Sanda:
+
+    def epoch_end_training(self):
+
+        self.iteration_count = 0
+        #Printing at the end of epoch
+        print("total number of sets in training in this epoch", self.training_totalsets)
+        print("among them how many are correct?", self.training_valid_answers)
+        print("total number of Wrong formats errors in training:", self.training_error_wrong_format_count)
+        print("total number of absent subset errors in training:", self.training_error_no_subset_count)
+        print("total number of not covering errors in training:", self.training_error_not_covering_count)
+        print("total number of not optimal errors in training",self.training_error_not_optimal_count)
+        print("list of coverage percentages of not-covering solutions for this epoch (training):", self.training_coverage_percentage_list_internal)
+        if self.training_coverage_percentage_list_internal:
+            self.training_coverage_average_percentage = round(sum(self.training_coverage_percentage_list_internal)/len(self.training_coverage_percentage_list_internal),2)
+        else:
+            self.training_coverage_average_percentage = 0
+        print("average coverage percentage for the epoch is:", self.training_coverage_average_percentage)
+
+
+        #Appending the lists
+        self.training_totalsets_epochs.append(self.training_totalsets)
+        self.training_valid_answers_epochs.append(self.training_valid_answers)
+        self.training_error_wrong_format_count_epochs.append(self.training_error_wrong_format_count)
+        self.training_error_no_subset_count_epochs.append(self.training_error_no_subset_count)
+        self.training_error_not_covering_count_epochs.append(self.training_error_not_covering_count)
+        self.training_error_not_optimal_count_epochs.append(self.training_error_not_optimal_count)
+        self.training_coverage_average_percentage_epochs.append(self.training_coverage_average_percentage)
+
+
+        #Print the lists to see them
+        print("list of number of sets epochs (training):", self.training_totalsets_epochs)
+        print("list of #of valid answers for epochs (training):", self.training_valid_answers_epochs)
+        print("list of #of Wrong format answers for epochs (training):", self.training_error_wrong_format_count_epochs)
+        print("list of #of absent subset answers for epochs (training):", self.training_error_no_subset_count_epochs)
+        print("list of #of not covering answers for epochs (training):", self.training_error_not_covering_count_epochs)
+        print("list of #of not optimal answers for epochs (training):", self.training_error_not_optimal_count_epochs)
+        print("list of average percentage of not covering answers for epochs (training):", self.training_coverage_average_percentage_epochs)
+
+        # To save yhe metrics based on my function:
+        results_training = {
+            "training_totalsets_epochs": self.training_totalsets_epochs,
+            "training_valid_answers_epochs": self.training_valid_answers_epochs,
+            "training_error_wrong_format_count_epochs": self.training_error_wrong_format_count_epochs,
+            "training_error_no_subset_count_epochs": self.training_error_no_subset_count_epochs,
+            "training_error_not_covering_count_epochs": self.training_error_not_covering_count_epochs,
+            "training_error_not_optimal_count_epochs": self.training_error_not_optimal_count_epochs,
+            "training_coverage_percentage_epochs": self.training_coverage_average_percentage_epochs
+        }
+        with open("results_training.json", "w") as json_file2:
+            json.dump(results_training, json_file2)
+
+        # Reset counters for the next epoch
+        self.training_totalsets = 0
+        self.training_valid_answers = 0
+        self.training_error_wrong_format_count = 0
+        self.training_error_no_subset_count = 0
+        self.training_error_not_covering_count = 0
+        self.training_error_no_subset_count = 0
+        self.training_error_optimal_count = 0
+        self.training_coverage_average_percentage = 0
+        self.training_coverage_percentage_list_internal = []
+

@@ -4,7 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-
+import json
+import os
 from logging import getLogger
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
@@ -99,16 +100,64 @@ class Evaluator(object):
         Evaluator.ENV = trainer.env
 
         # Sanda: Initializing for Error types in validation
-        self.error_counts = {
-            "Mismatched number of problem and solution sets": 0,
-            "Empty solution set": 0,
-            "Empty subset in solution set": 0,
+        self.iteration_count_validtest = 0
+        self.error_counts_validation = {
+            "Wrong Format": 0,
             "Subset not in problem set": 0,
-            "Solution not covering problem set": 0
+            "Solution not covering problem set": 0,
+            "Solution is not optimal": 0
         }
-        self.valid_solution_count = 0
+        self.valid_solution_count_validation = 0
+        self.coverage_percentage_validation = 0
         # Initialize epoch-wise counts
-        self.epoch_counts = []
+
+
+        # Sanda - for ploting:
+        self.validation_loss_epochs = []
+        self.validation_accuracy_epochs = []
+        self.test_loss_epochs = []
+        self.test_accuracy_epochs = []
+
+        #Sanda - for ploting errors"
+        # total number of sets processed for validation and test at each epoch
+        self.validation_totalsets = 0
+        self.validation_totalsets_epochs = []
+        self.test_totalsets = 0
+        self.test_totalsets_epochs = []
+        # total number of valid answers for validation and test at each epoch
+        self.validation_valid_answers = 0
+        self.validation_valid_answers_epochs = []
+        self.test_valid_answers = 0
+        self.test_valid_answers_epochs = []
+        # total number of wrong-format answers for validation and test at each epoch
+        self.validation_error_wrong_format_count = 0
+        self.validation_error_wrong_format_count_epochs = []
+        self.test_error_wrong_format_count = 0
+        self.test_error_wrong_format_count_epochs = []
+        # total number of not existing-subset answers for validation and test at each epoch
+        self.validation_error_no_subset_count = 0
+        self.validation_error_no_subset_count_epochs = []
+        self.test_error_no_subset_count = 0
+        self.test_error_no_subset_count_epochs = []
+        # total number of not covering answers for validation and test at each epoch
+        self.validation_error_not_covering_count = 0
+        self.validation_error_not_covering_count_epochs = []
+        self.test_error_not_covering_count = 0
+        self.test_error_not_covering_count_epochs = []
+        # total number of not optimal answers for validation and test at each epoch
+        self.validation_error_not_optimal_count = 0
+        self.validation_error_optimal_count_epochs = []
+        self.test_error_not_optimal_count = 0
+        self.test_error_optimal_count_epochs = []
+        # coverage percentage calculations for not-covering
+        self.validation_coverage_percentage_list_internal = []
+        self.validation_coverage_average_percentage = 0
+        self.validation_coverage_average_percentage_epochs = []
+        self.test_coverage_percentage_list_internal = []
+        self.test_coverage_average_percentage = 0
+        self.test_coverage_average_percentage_epochs = []
+
+
 
     def run_all_evals(self):
         """
@@ -131,52 +180,44 @@ class Evaluator(object):
                     else:
                         self.enc_dec_step(data_type, task, scores)
 
-        #Sanda
-        # After all evaluations are done, update epoch counts and print summary table
-        #self.update_epoch_counts(self.trainer.epoch)
-        #self.print_summary_table()
-
         return scores
 
-    # Sanda
-    def update_epoch_counts(self, epoch):
-        """
-        Update epoch-wise counts.
-        """
-        self.epoch_counts.append({
-            'epoch': epoch,
-            'valid_solution_count': self.valid_solution_count,
-            'error_counts': self.error_counts.copy()  # Make a copy to avoid reference issues
-        })
 
-    #Sanda
-    def print_summary_table(self):
-        """
-        Print summary table of epoch-wise counts.
-        """
-        print("\nSummary Table:")
-        print("{:<10} {:<20} {:<20}".format('Epoch No.', 'Valid Solution Count', 'Error Counts'))
-        for epoch_data in self.epoch_counts:
-            epoch = epoch_data['epoch']
-            valid_count = epoch_data['valid_solution_count']
-            error_counts = epoch_data['error_counts']
-            error_counts_str = ', '.join([f"{key}: {value}" for key, value in error_counts.items()])
-            print("{:<10} {:<20} {:<20}".format(epoch, valid_count, error_counts_str))
 
     def enc_dec_step(self, data_type, task, scores):
 
         #Sanda-Start:
-        idx = 0
-        pred_token_sequence = []
         self.error_counts_validation = {
-            "Mismatched number of problem and solution sets": 0,
-            "Empty solution set": 0,
-            "Empty subset in solution set": 0,
+            "Wrong Format": 0,
             "Subset not in problem set": 0,
-            "Solution not covering problem set": 0
+            "Solution not covering problem set": 0,
+            "Solution is not optimal": 0
         }
-        self.valid_solution_count_validation = 0
-        valid_sequence_count_validation = 0
+        idx = 0
+        # total set count
+        self.validation_totalsets = 0
+        self.test_totalsets = 0
+        # valid ansnwers count
+        self.validation_valid_answers = 0
+        self.test_valid_answers = 0
+        # wrong_format count
+        self.validation_error_wrong_format_count = 0
+        self.test_error_wrong_format_count = 0
+        # no-subset count
+        self.validation_error_no_subset_count = 0
+        self.test_error_no_subset_count = 0
+        # not_covering count
+        self.validation_error_not_covering_count = 0
+        self.test_error_not_covering_count = 0
+        # not_optimal count
+        self.validation_error_not_optimal_count = 0
+        self.test_error_not_optimal_count = 0
+        # AVERAGE
+        self.validation_coverage_average_percentage = 0
+        self.validation_coverage_percentage_list_internal = []
+        self.test_coverage_average_percentage = 0
+        self.test_coverage_percentage_list_internal = []
+
         # Sanda-End
 
         """
@@ -238,7 +279,9 @@ class Evaluator(object):
             valid = (t.sum(0) == len2 - 1).cpu().long()
 
             #Sanda-Start:
-            with torch.no_grad():
+            with ((((torch.no_grad())))):
+                pred_token_sequence = []
+
                 _, _, beam = decoder.generate_beam(encoded.transpose(0, 1), len1, beam_size=1, length_penalty=1.0,
                                                    early_stopping=1, max_len=200)
 
@@ -246,32 +289,61 @@ class Evaluator(object):
                     best_hypothesis = beam[b].hyp[0][1]  # Best hypothesis in the beam
                     ids = best_hypothesis[1:].tolist()  # Decoded token IDs
                     tok = [self.env.id2word[wid] for wid in ids]  # Convert token IDs to tokens
-                    pred_token_sequence.extend(tok)  # Store the predicted sequence for this beam
+                    pred_token_sequence.append(tok)  # Store the predicted sequence for this beam
 
-                input_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, input_token_sequence)
-                true_output_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, true_output_token_sequence)
-                pred_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, pred_token_sequence)
+                its = input_token_sequence
+                tots = true_output_token_sequence
+                pts = pred_token_sequence
 
+                for input_token_sequence, true_output_token_sequence, pred_token_sequence in zip(its, tots, pts):
 
-                #print(f"Input Token Sequence(E) {idx}:", input_token_sequence)
-                #print(f"True Output Token Sequence(E) {idx}:", true_output_token_sequence)
-                #print(f"Prediction Token Sequence(E) {idx}:", pred_token_sequence)
-                print(f"Input list of lists(E) {idx}:", input_list_of_lists)
-                print(f"True output list of lists(E) {idx}:", true_output_list_of_lists)
-                print(f"Prediction list of lists(E) {idx}:", pred_list_of_lists)
-                self.number_of_sets_validation, self.valid_solution_count_validation, self.error_counts_validation, self.valid_sequence_bool_validation = set_cover_utils.validate_set_cover_solution_validation(self, input_list_of_lists, pred_list_of_lists)
-                if self.valid_sequence_bool_validation:
-                    valid_sequence_count_validation += 1
+                    input_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, input_token_sequence)
+                    true_output_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, true_output_token_sequence)
+                    pred_list_of_lists = set_cover_utils.convert_token_sequence_to_list_of_lists(self, pred_token_sequence)
 
-                print(f"Number of correct answers in a sequence: {self.valid_solution_count_validation} / {self.number_of_sets_validation}")
-                print(f"error_counts: {self.error_counts_validation}")
-                print(f"Number of full correct sequence: {valid_sequence_count_validation} / {idx}")
+                    if data_type == 'valid':
+                        print("Validation iteration:", self.iteration_count_validtest)
+                    if data_type == 'test':
+                        print("Test iteration:", self.iteration_count_validtest)
 
+                    #print(f"Input Token Sequence(E) {idx}:", input_token_sequence)
+                    #print(f"True Output Token Sequence(E) {idx}:", true_output_token_sequence)
+                    #print(f"Prediction Token Sequence(E) {idx}:", pred_token_sequence)
+                    print(f"Input list of lists(E) {idx}:", input_list_of_lists)
+                    print(f"True output list of lists(E) {idx}:", true_output_list_of_lists)
+                    print(f"Prediction list of lists(E) {idx}:", pred_list_of_lists)
 
-                #Sanda-End
+                    self.valid_solution_count_validation, self.error_counts_validation, self.coverage_percentage_validation = set_cover_utils.validate_set_cover_solution_validation(self, input_list_of_lists, pred_list_of_lists, true_output_list_of_lists)
+
+                    print(f"Number of correct answers in a sequence:", self.valid_solution_count_validation)
+                    print(f"error_counts in a sequence: {self.error_counts_validation}")
+
+                    # Calculating total number of sets in one epoch
+                    if data_type == 'valid':
+                        self.validation_totalsets += 1
+                        self.validation_valid_answers += self.valid_solution_count_validation
+                        self.validation_error_wrong_format_count += self.error_counts_validation["Wrong Format"]
+                        self.validation_error_no_subset_count += self.error_counts_validation["Subset not in problem set"]
+                        self.validation_error_not_covering_count += self.error_counts_validation["Solution not covering problem set"]
+                        if self.error_counts_validation["Solution not covering problem set"] == 1:
+                            self.validation_coverage_percentage_list_internal.append(self.coverage_percentage_validation)
+                        self.validation_error_not_optimal_count += self.error_counts_validation["Solution is not optimal"]
+                        self.iteration_count_validtest += 1
+
+                    if data_type == 'test':
+                        self.test_totalsets += 1
+                        self.test_valid_answers += self.valid_solution_count_validation
+                        self.test_error_wrong_format_count += self.error_counts_validation["Wrong Format"]
+                        self.test_error_no_subset_count += self.error_counts_validation["Subset not in problem set"]
+                        self.test_error_not_covering_count += self.error_counts_validation["Solution not covering problem set"]
+                        if self.error_counts_validation["Solution not covering problem set"] == 1:
+                            self.test_coverage_percentage_list_internal.append(self.coverage_percentage_validation)
+                        self.test_error_not_optimal_count += self.error_counts_validation["Solution is not optimal"]
+                        self.iteration_count_validtest += 1
 
             # export evaluation details
             if params.eval_verbose:
+
                 for i in range(len(len1)):
                     src = idx_to_sp(env, x1[1:len1[i] - 1, i].tolist())
                     tgt = idx_to_sp(env, x2[1:len2[i] - 1, i].tolist())
@@ -280,6 +352,8 @@ class Evaluator(object):
                         logger.info(s)
                     f_export.write(s + "\n")
                     f_export.flush()
+
+
 
             # stats
             xe_loss += loss.item() * len(y)
@@ -301,12 +375,161 @@ class Evaluator(object):
         scores[f'{data_type}_{task}_xe_loss'] = xe_loss / _n_total
         scores[f'{data_type}_{task}_acc'] = 100. * _n_valid / _n_total
 
+        #Sanda: (Here we are outside the iterations)/end of epoch
+        # Append the metrics to the respective lists
+        self.iteration_count_validtest = 0
+
+        if task == 'set_cover':
+            if data_type == 'valid':
+                print("total number of sets in validation in this sequence", self.validation_totalsets)
+                print("among them how many are correct?", self.validation_valid_answers)
+                print("total number of Wrong formats errors in validation:", self.validation_error_wrong_format_count)
+                print("total number of absent subset errors in validation:", self.validation_error_no_subset_count)
+                print("total number of not covering errors in validation:", self.validation_error_not_covering_count)
+                print("total number of not optimal errors in validation:", self.validation_error_not_optimal_count)
+                print("list of coverage percentages of not-covering solutions for this epoch (validation):", self.validation_coverage_percentage_list_internal)
+
+                if self.validation_coverage_percentage_list_internal:
+                    self.validation_coverage_average_percentage = round(
+                        sum(self.validation_coverage_percentage_list_internal) / len(
+                            self.validation_coverage_percentage_list_internal), 2)
+                else:
+                    self.validation_coverage_average_percentage = 0
+
+                print("average coverage percentage (validation) for the epoch is:", self.validation_coverage_average_percentage)
+
+
+                # Appending the lists at the end of epoch
+                self.validation_loss_epochs.append(scores[f'{data_type}_{task}_xe_loss'])
+                self.validation_accuracy_epochs.append(scores[f'{data_type}_{task}_acc'])
+                #
+                self.validation_totalsets_epochs.append(self.validation_totalsets)
+                self.validation_valid_answers_epochs.append(self.validation_valid_answers)
+                self.validation_error_wrong_format_count_epochs.append(self.validation_error_wrong_format_count)
+                self.validation_error_no_subset_count_epochs.append(self.validation_error_no_subset_count)
+                self.validation_error_not_covering_count_epochs.append(self.validation_error_not_covering_count)
+                self.validation_error_optimal_count_epochs.append(self.validation_error_not_optimal_count)
+                self.validation_coverage_average_percentage_epochs.append(self.validation_coverage_average_percentage)
+
+                # Printing the lists
+                print("list of number of sets epochs (validation):", self.validation_totalsets_epochs)
+                print("list of valid answers for epochs (validation):",self.validation_valid_answers_epochs)
+                print("list of Wrong format answers for epochs (validation):",self.validation_error_wrong_format_count_epochs)
+                print("list of absent subset answers for epochs (validation):",self.validation_error_no_subset_count_epochs)
+                print("list of not covering answers for epochs (validation):", self.validation_error_not_covering_count_epochs)
+                print("list of not optimal answers for epochs (validation):", self.validation_error_optimal_count_epochs)
+                print("list of average percentage of not covering answers for epochs (validation):",
+                      self.validation_coverage_average_percentage_epochs)
+
+
+            elif data_type == 'test':
+                print("total number of sets in test in this sequence", self.test_totalsets)
+                print("among them how many are correct?", self.test_valid_answers)
+                print("total number of Wrong formats errors in test", self.test_error_wrong_format_count)
+                print("total number of absent subset errors in test", self.test_error_no_subset_count)
+                print("total number of not covering errors in test", self.test_error_not_covering_count)
+                print("total number of not optimal errors in test", self.test_error_not_optimal_count)
+                print("list of coverage percentages of not-covering solutions for this epoch (test):",
+                      self.test_coverage_percentage_list_internal)
+                if self.test_coverage_percentage_list_internal:
+                    self.test_coverage_average_percentage = round(
+                        sum(self.test_coverage_percentage_list_internal) / len(
+                            self.test_coverage_percentage_list_internal), 2)
+                else:
+                    self.test_coverage_average_percentage = 0
+                print("average coverage percentage (test) for the epoch is:", self.test_coverage_average_percentage)
+
+
+                # Appending the lists at the end of epochs
+                self.test_loss_epochs.append(scores[f'{data_type}_{task}_xe_loss'])
+                self.test_accuracy_epochs.append(scores[f'{data_type}_{task}_acc'])
+                #
+                self.test_totalsets_epochs.append(self.test_totalsets)
+                self.test_valid_answers_epochs.append(self.test_valid_answers)
+                self.test_error_wrong_format_count_epochs.append(self.test_error_wrong_format_count)
+                self.test_error_no_subset_count_epochs.append(self.test_error_no_subset_count)
+                self.test_error_not_covering_count_epochs.append(self.test_error_not_covering_count)
+                self.test_error_optimal_count_epochs.append(self.test_error_not_optimal_count)
+                self.test_coverage_average_percentage_epochs.append(self.test_coverage_average_percentage)
+
+                # Printing the lists
+                print("list of number of sets for epochs (test):",self.test_totalsets_epochs)
+                print("list of valid answers for epochs (test):",self.test_valid_answers_epochs)
+                print("list of wrong format answers for epochs (test):",self.test_error_wrong_format_count_epochs)
+                print("list of absent subset answers for epochs (test):",self.test_error_no_subset_count_epochs)
+                print("list of not covering answers for epochs (test):",self.test_error_not_covering_count_epochs)
+                print("list of not optimal answers for epochs (test)",self.test_error_optimal_count_epochs)
+                print("list of average percentage of not covering answers for epochs (test):",
+                      self.test_coverage_average_percentage_epochs)
+
+
+            else:
+                # Handle unexpected data types here
+                pass
+
+
+        #Sanda
+
         # per class perplexity and prediction accuracy
         for i in range(len(n_total)):
             if n_total[i].item() == 0:
                 continue
             # logger.info(f"{i}: {n_valid[i].item()} / {n_total[i].item()} ({100. * n_valid[i].item() / max(n_total[i].item(), 1)}%)")
             scores[f'{data_type}_{task}_acc_{i}'] = 100. * n_valid[i].item() / max(n_total[i].item(), 1)
+
+        #Sanda:
+            # At the end of all epochs, save these lists to a JSON file
+            metrics = {
+                "validation_loss_epochs": self.validation_loss_epochs,
+                "validation_accuracy_epochs": self.validation_accuracy_epochs,
+                "test_loss_epochs": self.test_loss_epochs,
+                "test_accuracy_epochs": self.test_accuracy_epochs
+            }
+
+            with open("metrics.json", "w") as json_file:
+                json.dump(metrics, json_file)
+
+            # To save yhe metrics based on my function:
+            results_validtest = {
+                "validation_totalsets_epochs" : self.validation_totalsets_epochs,
+                "test_totalsets_epochs" : self.test_totalsets_epochs,
+                "validation_valid_answers_epochs" : self.validation_valid_answers_epochs,
+                "test_valid_answers_epochs" : self.test_valid_answers_epochs,
+                "validation_error_wrong_format_count_epochs" : self.validation_error_wrong_format_count_epochs,
+                "test_error_wrong_format_count_epochs" : self.test_error_wrong_format_count_epochs,
+                "validation_error_no_subset_count_epochs" : self.validation_error_no_subset_count_epochs,
+                "test_error_no_subset_count_epochs" : self.test_error_no_subset_count_epochs,
+                "validation_error_not_covering_count_epochs" : self.validation_error_not_covering_count_epochs,
+                "test_error_not_covering_count_epochs" : self.test_error_not_covering_count_epochs,
+                "validation_error_not_optimal_count_epochs" : self.validation_error_optimal_count_epochs,
+                "test_error_not_optimal_count_epochs" : self.test_error_optimal_count_epochs,
+                "validation_coverage_percentage_epochs": self.validation_coverage_average_percentage_epochs,
+                "test_coverage_percentage_epochs": self.test_coverage_average_percentage_epochs
+
+            }
+            with open("results_validtest.json", "w") as json_file2:
+                json.dump(results_validtest, json_file2)
+
+            # Reseting counters for next epoch
+            self.validation_totalsets = 0
+            self.validation_valid_answers = 0
+            self.validation_error_wrong_format_count = 0
+            self.validation_error_no_subset_count = 0
+            self.validation_error_not_covering_count = 0
+            self.validation_error_not_optimal_count = 0
+            self.validation_coverage_average_percentage = 0
+            self.validation_coverage_percentage_list_internal = []
+
+            self.test_totalsets = 0
+            self.test_valid_answers = 0
+            self.test_error_wrong_format_count = 0
+            self.test_error_no_subset_count = 0
+            self.test_error_not_covering_count = 0
+            self.test_error_not_optimal_count = 0
+            self.test_coverage_percentage_list_internal = []
+
+
+
 
     def enc_dec_step_beam(self, data_type, task, scores):
 
@@ -360,19 +583,6 @@ class Evaluator(object):
         # iterator
         iterator = env.create_test_iterator(data_type, task, params=params, data_path=self.trainer.data_path)
         eval_size = len(iterator.dataset)
-
-        # Sanda-Start:
-        self.error_counts = {
-            "Mismatched number of problem and solution sets": 0,
-            "Empty solution set": 0,
-            "Empty subset in solution set": 0,
-            "Subset not in problem set": 0,
-            "Solution not covering problem set": 0
-        }
-        self.valid_solution_count = 0
-        self.number_of_sets = 0
-        self.valid_sequence_bool = False
-        # Sanda-End
 
         for (x1, len1), (x2, len2), nb_ops in iterator:
 
