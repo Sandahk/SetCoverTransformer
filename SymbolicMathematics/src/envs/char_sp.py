@@ -33,11 +33,12 @@ from .set_cover_utils import list_to_tokens
 
 #Sanda:
 from itertools import combinations
+from random import shuffle, random
 
 CLEAR_SYMPY_CACHE_FREQ = 10000
 
 
-SPECIAL_WORDS = ['<s>', '</s>', '<pad>', '(', ')', '[', ']',',']
+SPECIAL_WORDS = ['<s>', '</s>', '<pad>', '(', ')', '[', ']']
 SPECIAL_WORDS = SPECIAL_WORDS + [f'<SPECIAL_{i}>' for i in range(len(SPECIAL_WORDS), 10)]
 
 
@@ -791,8 +792,22 @@ class CharSPEnvironment(object):
                     return selected_columns
         return None
 
+    def shuffle_subsets(self, input_sequence, shuffle_prob=0.5):
+        """
+        Shuffle elements within each subset of the input sequence.
+        """
+        shuffled_sequence = []
+        for subset in input_sequence:
+            if random() < shuffle_prob:
+                shuffled_subset = subset[:]
+                shuffle(shuffled_subset)
+                shuffled_sequence.append(shuffled_subset)
+            else:
+                shuffled_sequence.append(subset)
+        return shuffled_sequence
 
-    def gen_set_cover(self, rng, max_universe_size=6):
+
+    def gen_set_cover1(self, rng, max_universe_size=6):
         # Generate a random binary matrix
         num_rows = rng.randint(3, max_universe_size + 1) #elements
         num_cols = rng.randint(2, 2*max_universe_size + 1) #subsets
@@ -850,6 +865,55 @@ class CharSPEnvironment(object):
             input_sequence.append(subset)
 
         label_sequence = [subset for idx, subset in enumerate(input_sequence) if idx in solution_indices]
+
+        input_sequence = list_to_tokens(input_sequence)
+        label_sequence = list_to_tokens(label_sequence)
+
+
+        return input_sequence, label_sequence
+
+
+    def gen_set_cover(self, rng, max_universe_size=6, max_subsets=40):
+        large_subset_prob = 0.1
+        universe_list = list(range(10))  # Default universe list from 0 to 20
+        selected_elements = np.random.choice(universe_list, max_universe_size, replace=False)
+
+        # Generate a random binary matrix
+        num_rows = rng.randint(5, max_universe_size + 1)  # elements
+        num_cols = rng.randint(5, max_subsets + 1)  # subsets
+        binary_matrix = np.zeros((num_rows, num_cols), dtype=bool)
+        if rng.rand() < large_subset_prob:
+            max_subset_size = rng.randint(num_rows // 2, num_rows + 1)
+        else:
+            max_subset_size = rng.randint(1, max(2, num_rows // 2) + 1)
+
+        for j in range(num_cols):
+            # Choose random indices to set True, limited by max_trues_per_subset
+            subset_size = rng.randint(1, max_subset_size + 1)
+            true_indices = rng.choice(num_rows, subset_size, replace=False)
+            binary_matrix[true_indices, j] = True
+
+        for i in range(num_rows):
+            if not binary_matrix[i].any():
+                binary_matrix[i, np.random.randint(0, num_cols)] = True
+        for j in range(num_cols):
+            if not binary_matrix[:, j].any():
+                binary_matrix[np.random.randint(0, num_rows), j] = True
+
+        # Remove duplicate rows
+        binary_matrix = np.unique(binary_matrix, axis=1)
+        # Find a set cover solution using brute force
+        solution_indices = self.set_cover_bruteforce(binary_matrix)
+
+        # Convert binary matrix columns to sequences of selected elements
+        input_sequence = []
+        for column in binary_matrix.T:
+            subset = [selected_elements[row] for row in np.where(column)[0]]
+            input_sequence.append(subset)
+
+        label_sequence = [subset for idx, subset in enumerate(input_sequence) if idx in solution_indices]
+        # Shuffle elements within each subset of the input sequence
+        input_sequence = self.shuffle_subsets(input_sequence)
 
         input_sequence = list_to_tokens(input_sequence)
         label_sequence = list_to_tokens(label_sequence)

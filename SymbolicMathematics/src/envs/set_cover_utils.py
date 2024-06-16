@@ -142,26 +142,28 @@ def validate_set_cover_solution(self, problem_set, solution_set, true_output):
     for j, subset in enumerate(solution_set):
         if not subset:
             self.error_counts["Wrong Format"] += 1
-            break
+            return self.valid_solution_count, self.error_counts, self.coverage_percentage
 
-    # Check if all subsets in the solution set exist in the problem set
-        if subset not in problem_set:
-            self.error_counts["Subset not in problem set"] += 1
-            break
+        # Check if all subsets in the solution set exist in the problem set
+        problem_set_set = [frozenset(subset) for subset in problem_set]
+        for subset in solution_set:
+            if frozenset(subset) not in problem_set_set:
+                self.error_counts["Subset not in problem set"] += 1
+                return self.valid_solution_count, self.error_counts, self.coverage_percentage
+
+
+    # Check if the solution set covers the entire problem set
+    covered_tokens = set().union(*solution_set)
+    problem_tokens = set(token for sublist in problem_set for token in sublist)
+    if covered_tokens != problem_tokens:
+        self.coverage_percentage = round(len(covered_tokens) / len(problem_tokens) * 100, 2)
+        self.error_counts["Solution not covering problem set"] += 1
 
     else:
-        # Check if the solution set covers the entire problem set
-        covered_tokens = set().union(*solution_set)
-        problem_tokens = set(token for sublist in problem_set for token in sublist)
-        if covered_tokens != problem_tokens:
-            self.coverage_percentage = round(len(covered_tokens) / len(problem_tokens) * 100, 2)
-            self.error_counts["Solution not covering problem set"] += 1
-
+        if len(solution_set) > len(true_output):
+            self.error_counts["Solution is not optimal"] += 1
         else:
-            if len(solution_set) > len(true_output):
-                self.error_counts["Solution is not optimal"] += 1
-            else:
-                self.valid_solution_count += 1
+            self.valid_solution_count += 1
 
     return self.valid_solution_count, self.error_counts, self.coverage_percentage
 
@@ -201,15 +203,15 @@ def validate_set_cover_solution_validation(self, problem_set, solution_set, true
         self.error_counts_validation["Solution not covering problem set"] += 1
         return self.valid_solution_count_validation, self.error_counts_validation, self.coverage_percentage_validation
 
-
-    if len(solution_set) > len(true_output):
-        self.error_counts_validation["Solution is not optimal"] += 1
     else:
-        self.valid_solution_count_validation += 1
+        if len(solution_set) > len(true_output):
+            self.error_counts_validation["Solution is not optimal"] += 1
+        else:
+            self.valid_solution_count_validation += 1
 
     return self.valid_solution_count_validation, self.error_counts_validation, self.coverage_percentage_validation
 
 
 # def extract_lists(char_list)
 def list_to_tokens(lst):
-    return [str(c) for c in str(lst) if str(c) != ' ']
+    return [str(c) for c in str(lst) if str(c) not in [' ', ',']]
